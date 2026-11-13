@@ -306,7 +306,7 @@ export async function readProject(file: File, objectsOnly = false): Promise<{ it
   const materials = { plates, config, colours, matrix: numbers(config.flush_volumes_matrix), multiplier: numbers(config.flush_multiplier)?.[0] ?? null,
     hasConfig: !!configBytes || !!entry('Metadata/Slic3r_PE.config'), builds: items.map((it) => ({ object: Number(it.id), instance: it.instance })) };
   if (objectsOnly) {
-    materials.config = {}; materials.colours = []; materials.matrix = null; materials.multiplier = null; materials.hasConfig = false;
+    materials.config = {}; materials.matrix = null; materials.multiplier = null; materials.hasConfig = false;
     materials.plates = plates.map((p) => ({ index: p.index, name: '', origin: p.origin, settings: {} }));
     return { items, materials: { ...materials, skipped: [...skipped] }, mesh };
   }

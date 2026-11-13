@@ -14,16 +14,14 @@ type ImportedPlate = { index: number; objects: PlateObject[] };
 function placeObjects(existing: PlateObject[], incoming: PlateObject[]): PlateObject[] {
   const area = bedArea();
   const placed = [...existing];
+  const occupied = placed.flatMap((o) => o.instances.map((i) => instanceBox(o, i)));
+  const collide = (a: ReturnType<typeof instanceBox>, b: ReturnType<typeof instanceBox>) =>
+    a.min.x < b.max.x - 0.001 && a.max.x > b.min.x + 0.001 &&
+    a.min.y < b.max.y - 0.001 && a.max.y > b.min.y + 0.001 &&
+    a.min.z < b.max.z - 0.001 && a.max.z > b.min.z + 0.001;
   for (const object of incoming) {
     let next = object;
-    const box = instanceBox(object, object.instances[0]);
-    const overlaps = placed.some((o) => o.instances.some((i) => {
-      const other = instanceBox(o, i);
-      return box.min.x < other.max.x - 0.001 && box.max.x > other.min.x + 0.001 &&
-        box.min.y < other.max.y - 0.001 && box.max.y > other.min.y + 0.001 &&
-        box.min.z < other.max.z - 0.001 && box.max.z > other.min.z + 0.001;
-    }));
-    if (overlaps || outsideBed([object], area, Infinity).size) {
+    if (outsideBed([object], area, Infinity).size || occupied.some((b) => collide(instanceBox(object, object.instances[0]), b))) {
       const spot = nextFreeSpot(placed, object, area) ?? bedBounds(area).center;
       next = { ...object, instances: object.instances.map((i) => ({ ...i, x: spot.x, y: spot.y })) };
     }
@@ -32,8 +30,9 @@ function placeObjects(existing: PlateObject[], incoming: PlateObject[]): PlateOb
   return placed;
 }
 
-export function objectsPatch(state: State, imported: ImportedPlate[]): Partial<State> {
-  const slots = Math.max(1, state.filamentSlots.length);
+export function objectsPatch(state: State, imported: ImportedPlate[], filaments?: { colours: string[]; adopt: boolean }): Partial<State> {
+  const needed = Math.max(0, ...imported.flatMap((p) => p.objects.map((o) => o.extruder)), filaments?.colours.length ?? 0);
+  const slots = Math.max(1, state.filamentSlots.length, needed);
   const plates = listedPlates(state).map((p) => ({ ...p }));
   let nextIndex = Math.max(...plates.map((p) => p.index)) + 1;
   for (const [i, incoming] of imported.entries()) {
@@ -45,9 +44,15 @@ export function objectsPatch(state: State, imported: ImportedPlate[]): Partial<S
   }
   const active = plates.find((p) => p.index === state.plateIndex)!;
   const last = active.objects.at(-1);
-  return { objects: active.objects, projectPlates: plates.length > 1 || state.projectPlates.length ? plates : [],
+  const patch: Partial<State> = { objects: active.objects, projectPlates: plates.length > 1 || state.projectPlates.length ? plates : [],
     selected: last ? { object: last.id, instance: last.instances[0].id, allInstances: true } : null,
     tab: 'prepare', job: markStale(state.job) };
+  if (slots > state.filamentSlots.length) {
+    patch.filamentSlots = [...state.filamentSlots, ...Array.from({ length: slots - state.filamentSlots.length }, () => state.filamentSlots.at(-1) ?? '')];
+    patch.slotColours = [...state.slotColours, ...Array.from({ length: slots - state.slotColours.length }, () => undefined)];
+  }
+  if (filaments?.adopt && filaments.colours.length) patch.slotColours = filaments.colours.map((c) => c || undefined);
+  return patch;
 }
 
 export async function importObjects(file: File, allowNew = false, sourceUrl?: string): Promise<number> {
@@ -55,12 +60,12 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
   const task = importing.begin('loading');
   const busy = beginBusy(`Reading ${file.name}`, task.signal);
   const plates = new Map<number, ImportedPlate>();
-  let items: ProjectItem[] = [], skipped: string[] = [];
+  let items: ProjectItem[] = [], skipped: string[] = [], colours: string[] = [];
   const objects: PlateObject[] = [];
   let committed = false;
   try {
     await loadProject(file, {
-      items(list, materials) { items = list; skipped = materials.skipped ?? []; },
+      items(list, materials) { items = list; skipped = materials.skipped ?? []; colours = materials.colours ?? []; },
       mesh(i, geometry, centre) {
         if (!task.current()) { geometry.dispose(); return; }
         const item = items[i];
@@ -90,7 +95,7 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
       if (!await newProject(true)) return 0;
     }
     if (choice !== 'new' && !task.current()) return 0;
-    undoable('Import objects', () => setState((state) => objectsPatch(state, [...plates.values()].sort((a, b) => a.index - b.index))));
+    undoable('Import objects', () => setState((state) => objectsPatch(state, [...plates.values()].sort((a, b) => a.index - b.index), { colours, adopt: choice === 'new' })));
     committed = true;
     task.done();
     return objects.length;

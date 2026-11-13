@@ -16,7 +16,7 @@ import { applicabilityKey, worksWithNone } from './WorksWith';
 import { archiveProfiles, profileCopyCreation, restoreProfiles } from './transactions';
 import { documentGeneration } from '../state/history';
 import { DetailPane, ProfileEditor, type ProfileDraft } from './ProfileEditor';
-import { addCatalogFamilies, addCatalogFamily, addCatalogPrinter, addCatalogPrinters, useCatalog } from './catalog-add';
+import { addCatalogFamilies, addCatalogFamily, addCatalogPrinter, addCatalogPrinters, catalogPrinterOwned, useCatalog } from './catalog-add';
 import type { CatalogFamily, CatalogModel, CatalogRead } from './catalog-reads';
 import { materialRank } from './Pickers';
 import { modelLabel, nozzleField, printerLine, profileColour, profileSummary, rowDetail, vendorField, vendorLabel } from './metadata';
@@ -402,6 +402,8 @@ export default function PresetsWindow({ type: initialType, name, compare, edit =
   };
   const addFromCatalog = async (row:Item,nozzle?:string,colour?:string) => {
     if(getState().profileLibraryLoad.state!=='ready' || !row.catalog)return;
+    if(type === 'machine' && catalogPrinterOwned(getState(), {vendor: row.vendor, model: row.catalog as CatalogModel, nozzle: nozzle ?? ''})
+      && !await confirmDialog('Already in your printers list', `You already have a ${row.name}. Add another one?`, ['Add another', 'Cancel'])) return;
     await run('adding', async () => {
     setBulkError(null);
     const owns=owner();

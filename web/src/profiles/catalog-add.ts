@@ -41,12 +41,16 @@ const namer = (s: State) => {
   const planned: UserPreset[] = [];
   return { name: (type: 'machine' | 'filament', wanted: string) => uniqueName({ ...s, userPresets: [...s.userPresets, ...planned] }, type, wanted), keep: (p: UserPreset) => { planned.push(p); return p; } };
 };
+export function catalogPrinterOwned(s: State, { model, nozzle }: PrinterChoice): boolean {
+  const machine = model.machines[nozzle];
+  return !!machine && owned(s).some((p) => p.type === 'machine' && (p.base?.name ?? p.inherits) === machine);
+}
 
-export async function addCatalogPrinters(choices: PrinterChoice[]): Promise<AddResult> {
+export async function addCatalogPrinters(choices: PrinterChoice[], force = false): Promise<AddResult> {
   const defaults = await Promise.all(choices.map(printDefaults));
   let existing: string[] = [], chosen: string[] = [];
   const result = await profileBatchCreation((s) => {
-    const names = namer(s), taken = new Map(owned(s).filter((p) => p.type === 'machine').map((p) => [p.base?.name ?? p.inherits, profileKey(p)]));
+    const names = namer(s), taken = new Map<string, string>(force ? [] : owned(s).filter((p) => p.type === 'machine').map((p) => [p.base?.name ?? p.inherits, profileKey(p)] as const));
     const skipped: string[] = [], records: UserPreset[] = [];
     existing = []; chosen = [];
     choices.forEach((choice, i) => {
@@ -62,8 +66,8 @@ export async function addCatalogPrinters(choices: PrinterChoice[]): Promise<AddR
   return { keys: result.keys, existing, skipped: result.skipped, chosen };
 }
 export async function addCatalogPrinter(vendor: string, model: CatalogModel, nozzle: string): Promise<string> {
-  const { keys, skipped } = await addCatalogPrinters([{ vendor, model, nozzle }]);
-  if (!keys.length) throw new Error(`${skipped[0]} is already in your printers list.`);
+  const { keys } = await addCatalogPrinters([{ vendor, model, nozzle }], true);
+  if (!keys.length) throw new Error(`${model.name} could not be added.`);
   return keys[0];
 }
 

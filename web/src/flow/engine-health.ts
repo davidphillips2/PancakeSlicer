@@ -9,6 +9,7 @@ export interface EngineHealth {
   artifact_manifest?: { features?: Record<string, unknown>; binary_sha256?: string; resources_sha256?: string;
     validated?: boolean; preview_ready?: boolean; print_qualified?: boolean };
   engine_state?: string;
+  reason?: string;
 }
 type HealthEvent = { type: 'HEALTH'; health: EngineHealth } | { type: 'FAIL' };
 interface HealthContext { health: EngineHealth | null }

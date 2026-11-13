@@ -11,7 +11,14 @@ import { Field } from './Field';
 import { GroupHead, isGroupOpen, setGroupOpen, useSettingsGroups } from './SettingsGroup';
 import './process-settings.css';
 
-const shortReason = (m: MethodAvailability) => m.recovery === 'update_engine' ? (toolArtifactManifest ? 'Not in this engine build' : 'Engine still starting')
+const ENGINE_ISSUES: [RegExp, string][] = [
+  [/artifact identity mismatch/, "Engine resources don't match this build"],
+  [/manifest unreadable/, 'Engine manifest unreadable'],
+  [/executable unavailable/, 'Slicing engine missing'],
+  [/executable changed/, 'Engine changed—restart to reprobe'],
+];
+const shortReason = (m: MethodAvailability, issue?: string) => m.recovery === 'update_engine'
+  ? (toolArtifactManifest ? 'Not in this engine build' : issue ?? 'Engine still starting')
   : m.recovery === 'repair_printer' ? 'Printer axes unknown'
   : /rotary/i.test(m.reason ?? '') ? 'Needs rotary axes'
   : /Auto/.test(m.reason ?? '') ? 'Experimental on this printer' : 'Not available';
@@ -76,6 +83,7 @@ const CLEARANCE_GROUP = 'Head clearance', TUNING_GROUP = 'Advanced non-planar';
 
 export function SurfaceSettings({config,system,availability,editor,dirty,uiMode,legacyKeys = [],readOnly = false}: {config:Config;system:Config;availability:MethodAvailabilityResult;editor?:ProfileFields;dirty:Config;uiMode:OptionMode;legacyKeys?:string[];readOnly?:boolean}) {
   const engine = useEngineHealth();
+  const engineIssue = ENGINE_ISSUES.find(([re]) => re.test(engine.context.health?.reason ?? ''))?.[1];
   useEffect(() => {void probeEngine();}, []);
   const mode = String(config.nonplanar_mode ?? OPTIONS.nonplanar_mode?.default ?? 'off');
   const slantObject = useStore((s) => !!slantTarget(s));
@@ -98,7 +106,7 @@ export function SurfaceSettings({config,system,availability,editor,dirty,uiMode,
     const labels = modes?.enum_labels ?? values.map(v => def.enum_labels?.[def.enum_values?.indexOf(v) ?? -1] ?? v);
     const blocked = values.map(v => methods.find(m => m.id === v && !m.supported));
     return row(key, {label: target === 'mode' ? 'Slicing method' : undefined, definition: {...modes?.tooltip && {tooltip: modes.tooltip}, gui_type: 'select_close', enum_values: values,
-      enum_labels: labels, enum_disabled: values.filter((_, i) => blocked[i]), enum_notes: blocked.map((m, i) => m && values[i] !== current ? shortReason(m) : undefined)}});
+      enum_labels: labels, enum_disabled: values.filter((_, i) => blocked[i]), enum_notes: blocked.map((m, i) => m && values[i] !== current ? shortReason(m, engineIssue) : undefined)}});
   };
   const autoOrValue = (key: string, named: [string, string][], isNamed: (n: number) => string | undefined, custom: string, valueLabel: string) => {
     const def = OPTIONS[key]; if (!def) return [];
@@ -132,7 +140,7 @@ export function SurfaceSettings({config,system,availability,editor,dirty,uiMode,
     if (!problem || (target === 'mode' ? mode : wave) !== problem.method) return null;
     const method = availability.methods.find(m => m.target === target && m.id === problem.method);
     const key = target === 'mode' ? 'nonplanar_mode' : WAVE;
-    return <div key={`${key}-why`} className="surface-why" role="alert"><span>{method ? shortReason(method) : 'Not available'}</span>
+    return <div key={`${key}-why`} className="surface-why" role="alert"><span>{method ? shortReason(method, engineIssue) : 'Not available'}</span>
       {problem.recovery === 'repair_printer'
         ? <button type="button" className="link" onClick={() => setState({presetUx:{kind:'presets',type:'machine',name:getState().printer,edit:true}})}>Edit printer axes</button>
         : <button type="button" className="link" onClick={() => openMethodChoice(key)}>Choose another method</button>}

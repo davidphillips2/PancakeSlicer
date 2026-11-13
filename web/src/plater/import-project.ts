@@ -1,6 +1,7 @@
-import type { PlateObject, State } from '../state/store';
+import type { Config } from '../api/types';
+import type { LayerEvent, PlateObject, State } from '../state/store';
 import type { ProjectItem } from './threemf';
-import { markStale, newId, setState, toast } from '../state/store';
+import { getState, markStale, newId, setState, toast } from '../state/store';
 import { documentGeneration, undoable } from '../state/history';
 import { beginBusy } from '../state/busy';
 import { importing } from '../flow/import';
@@ -9,7 +10,7 @@ import { bedArea, newProject } from '../actions';
 import { bakeStl, bedBounds, instanceBox, loadProject, nextFreeSpot, outsideBed } from './geometry';
 import { listedPlates } from './plates';
 
-type ImportedPlate = { index: number; objects: PlateObject[] };
+type ImportedPlate = { index: number; objects: PlateObject[]; name?: string; settings?: Config; locked?: boolean; events?: LayerEvent[] };
 
 function placeObjects(existing: PlateObject[], incoming: PlateObject[]): PlateObject[] {
   const area = bedArea();
@@ -40,7 +41,8 @@ export function objectsPatch(state: State, imported: ImportedPlate[], filaments?
     const previous = plates.find((p) => p.index === index);
     const objects = incoming.objects.map((o) => ({ ...o, extruder: Math.max(1, Math.min(slots, o.extruder)) }));
     if (previous) previous.objects = placeObjects(previous.objects, objects);
-    else plates.push({ index, name: '', origin: [0, 0], settings: {}, events: [], objects: placeObjects([], objects) });
+    else plates.push({ index, name: incoming.name ?? '', origin: [0, 0], settings: incoming.settings ?? {}, events: incoming.events ?? [],
+      ...(incoming.locked ? { locked: true } : {}), objects: placeObjects([], objects) });
   }
   const active = plates.find((p) => p.index === state.plateIndex)!;
   const last = active.objects.at(-1);
@@ -55,7 +57,57 @@ export function objectsPatch(state: State, imported: ImportedPlate[], filaments?
   return patch;
 }
 
+const filamentColoursOf = (settings: Config): string[] => {
+  const value = settings.filament_colour;
+  return (Array.isArray(value) ? value : typeof value === 'string' ? value.split(';') : []).map((c) => String(c ?? ''));
+};
+
+async function importObjectsNative(file: File, allowNew: boolean, sourceUrl?: string): Promise<number> {
+  const generation = documentGeneration();
+  const task = importing.begin('loading');
+  const busy = beginBusy(`Reading ${file.name}`, task.signal);
+  let committed = false;
+  try {
+    const { explodeProject } = await import('./explode');
+    const result = await explodeProject(file);
+    if (!task.current()) return 0;
+    for (const plate of result.plates) for (const object of plate.objects) if (sourceUrl) object.sourceUrl = sourceUrl;
+    const objects = result.plates.flatMap((p) => p.objects);
+    if (!objects.length) throw new Error(`${file.name}: no 3D meshes found in this file`);
+    const choice = await importObjectsDialog(file.name, objects.length, [], allowNew);
+    if (!choice || !task.current() || generation !== documentGeneration()) return 0;
+    if (choice === 'new') {
+      task.done();
+      if (!await newProject(true)) return 0;
+    }
+    if (choice !== 'new' && !task.current()) return 0;
+    undoable('Import objects', () => setState((state) => objectsPatch(state, result.plates, { colours: filamentColoursOf(result.settings), adopt: choice === 'new' })));
+    committed = true;
+    task.done();
+    return objects.length;
+  } catch (error) {
+    if (!committed) throw error;
+    if (task.current()) { task.fail(error); toast(error instanceof Error ? error.message : String(error)); }
+    return 0;
+  } finally {
+    busy.end();
+    if (task.current()) task.done();
+  }
+}
+
 export async function importObjects(file: File, allowNew = false, sourceUrl?: string): Promise<number> {
+  const s = getState();
+  if (s.features?.explode === true && !s.api?.mock) {
+    try {
+      return await importObjectsNative(file, allowNew, sourceUrl);
+    } catch {
+      // engine explode unavailable or failed before committing — parse the file in the browser instead
+    }
+  }
+  return importObjectsParsed(file, allowNew, sourceUrl);
+}
+
+async function importObjectsParsed(file: File, allowNew = false, sourceUrl?: string): Promise<number> {
   const generation = documentGeneration();
   const task = importing.begin('loading');
   const busy = beginBusy(`Reading ${file.name}`, task.signal);

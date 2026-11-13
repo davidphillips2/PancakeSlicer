@@ -148,17 +148,17 @@ func parseConfig() Config {
 func main() {
 	cfg := parseConfig()
 	if cfg.SourceURL == "" && cfg.SourceArchive == "" {
-		log.Printf("WARNING: no Corresponding Source offer configured; operator must set ORCA_WEB_SOURCE_URL or ORCA_WEB_SOURCE_ARCHIVE (AGPL-3.0 section 13)")
+		logWarn("no Corresponding Source offer configured; operator must set ORCA_WEB_SOURCE_URL or ORCA_WEB_SOURCE_ARCHIVE (AGPL-3.0 section 13)")
 	}
 	if cfg.SourceArchive != "" {
 		if file, err := openSourceArchive(cfg); err != nil {
-			log.Printf("WARNING: Corresponding Source archive rejected: %v (AGPL-3.0 section 13)", err)
+			logWarn("Corresponding Source archive rejected: %v (AGPL-3.0 section 13)", err)
 		} else {
 			file.Close()
 		}
 	}
 	if st, err := os.Stat(cfg.Tool); err != nil || st.IsDir() {
-		log.Printf("warning: tool %s not found; jobs will fail until it is built", cfg.Tool)
+		logWarn("tool %s not found; jobs will fail until it is built", cfg.Tool)
 	}
 	if st, err := os.Stat(filepath.Join(cfg.Resources, "profiles")); err != nil || !st.IsDir() {
 		log.Fatalf("no profiles directory under %s", cfg.Resources)
@@ -173,7 +173,7 @@ func main() {
 		}
 		log.Printf("printer connections: %d saved; printers may live at %s", len(cfg.PrinterStore.printers), hosts)
 		if cfg.BearerToken == "" {
-			log.Printf("WARNING: printer connections are on without a bearer token; anyone who can reach this service can add printers and start prints")
+			logWarn("printer connections are on without a bearer token; anyone who can reach this service can add printers and start prints")
 		}
 	}
 	cfg.BundleDigest = newBundleDigest(cfg.Tool, cfg.Resources)
@@ -211,12 +211,12 @@ func main() {
 	}
 	cfg.Features, cfg.Options = features, options
 	if placementErr != nil {
-		log.Printf("R238 placement unavailable; plate z/printable and loaded project saves require an upgraded tool: %v", placementErr)
+		logWarn("R238 placement unavailable; plate z/printable and loaded project saves require an upgraded tool: %v", placementErr)
 	} else {
 		cfg.Features.PlatePlacement = true
 	}
 	if plateIndexErr != nil {
-		log.Printf("selected project plates unavailable: %v", plateIndexErr)
+		logWarn("selected project plates unavailable: %v", plateIndexErr)
 	} else {
 		cfg.Features.PlateIndex = true
 	}
@@ -239,7 +239,7 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP shutdown: %v", err)
+			logError("HTTP shutdown: %v", err)
 			srv.Close()
 		}
 		jobs.Cleanup()
@@ -262,7 +262,7 @@ func warmPresets(presets *PresetIndex) error {
 				_, err = filamentCatalogResponse(vendor)
 			}
 			if err != nil {
-				log.Printf("cannot preload %s presets: %v", name, err)
+				logWarn("cannot preload %s presets: %v", name, err)
 			}
 		}
 	}()

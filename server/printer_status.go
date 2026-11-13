@@ -326,7 +326,7 @@ func loadSendHistory(dir string) *sendHistory {
 	b, err := os.ReadFile(h.path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			log.Printf("warning: send history %s: %v", h.path, err)
+			logWarn("send history %s: %v", h.path, err)
 		}
 		return h
 	}
@@ -334,7 +334,7 @@ func loadSendHistory(dir string) *sendHistory {
 		Sends []Transfer `json:"sends"`
 	}
 	if err := json.Unmarshal(b, &file); err != nil {
-		log.Printf("warning: send history %s is not valid JSON; kept as %s.invalid", h.path, h.path)
+		logWarn("send history %s is not valid JSON; kept as %s.invalid", h.path, h.path)
 		os.Rename(h.path, h.path+".invalid")
 		return h
 	}
@@ -376,7 +376,7 @@ func loadSendHistory(dir string) *sendHistory {
 	}
 	if ran > 0 {
 		if err := backupOnce(h.path+".pre-running", b); err != nil {
-			log.Printf("warning: send history: cannot back up %s before migrating it: %v", h.path, err)
+			logWarn("send history: cannot back up %s before migrating it: %v", h.path, err)
 			return h
 		}
 		if migrated == 0 {
@@ -387,7 +387,7 @@ func loadSendHistory(dir string) *sendHistory {
 		backup := h.path + ".pre-outcome"
 		if _, err := os.Stat(backup); errors.Is(err, os.ErrNotExist) {
 			if err := writeFileAtomic(backup, b); err != nil {
-				log.Printf("warning: send history: cannot back up %s before migrating it: %v", h.path, err)
+				logWarn("send history: cannot back up %s before migrating it: %v", h.path, err)
 				return h
 			}
 		}
@@ -436,7 +436,7 @@ func (h *sendHistory) writeLocked() {
 		Sends []Transfer `json:"sends"`
 	}{h.list}, "", " ")
 	if err := writeFileAtomic(h.path, b); err != nil {
-		log.Printf("warning: cannot save the send history: %v", err)
+		logWarn("cannot save the send history: %v", err)
 	}
 }
 

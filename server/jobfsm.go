@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -89,15 +88,15 @@ func (j *Job) setStateLocked(s JobState, reason string) bool {
 		j.transitions = j.transitions[len(j.transitions)-maxTransitions:]
 	}
 	if f, err := os.OpenFile(filepath.Join(j.Dir, "transitions.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err != nil {
-		log.Printf("job %s transition log: %v", j.ID, err)
+		logError("job %s transition log: %v", j.ID, err)
 	} else {
 		if err := json.NewEncoder(f).Encode(t); err != nil {
-			log.Printf("job %s transition log: %v", j.ID, err)
+			logError("job %s transition log: %v", j.ID, err)
 		}
 		f.Close()
 	}
 	if !t.Accepted {
-		log.Printf("job %s illegal transition %s -> %s: %s", j.ID, t.From, t.To, reason)
+		logError("job %s illegal transition %s -> %s: %s", j.ID, t.From, t.To, reason)
 		return false
 	}
 	j.state, j.errMsg = s, reason
@@ -192,7 +191,7 @@ func (j *Job) persistLocked() {
 	}
 	j.persistenceErr = err
 	if err != nil {
-		log.Printf("job %s persist: %v", j.ID, err)
+		logError("job %s persist: %v", j.ID, err)
 	}
 }
 
@@ -219,7 +218,7 @@ func (j *Job) writeEventLocked(e Event, compact bool) {
 		}
 	}
 	if err != nil {
-		log.Printf("job %s event journal: %v", j.ID, err)
+		logError("job %s event journal: %v", j.ID, err)
 	}
 }
 
@@ -236,7 +235,7 @@ func (m *JobManager) restoreJobs() error {
 		b, err := os.ReadFile(filepath.Join(dir, "job.json"))
 		var r jobRecord
 		if err != nil || json.Unmarshal(b, &r) != nil || r.ID != entry.Name() || jobTransitions[r.State] == nil {
-			log.Printf("retaining unreadable job directory %s", entry.Name())
+			logWarn("retaining unreadable job directory %s", entry.Name())
 			continue
 		}
 		for _, journal := range []string{"transitions.jsonl", "events.jsonl"} {
@@ -387,7 +386,7 @@ func scanJobJournal(r io.Reader, fn func(string)) {
 		fn(s.Text())
 	}
 	if err := s.Err(); err != nil {
-		log.Printf("job journal: %v", err)
+		logError("job journal: %v", err)
 	}
 }
 

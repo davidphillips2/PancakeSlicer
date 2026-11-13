@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -63,7 +62,7 @@ func (st *workspaceStore) saveLeases() {
 	}
 	raw, _ := json.Marshal(st.leases)
 	if err := writeFileAtomic(filepath.Join(st.root, "leases.json"), raw); err != nil {
-		log.Printf("project leases: %v", err)
+		logError("project leases: %v", err)
 	}
 }
 

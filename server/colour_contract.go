@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,7 +67,7 @@ func probeColourChange(c Config) map[string]bool {
 			features[family.vendor] = err == nil
 			mu.Unlock()
 			if err != nil {
-				log.Printf("%s colour-change emission unavailable: %v", family.vendor, err)
+				logWarn("%s colour-change emission unavailable: %v", family.vendor, err)
 			}
 		}()
 	}

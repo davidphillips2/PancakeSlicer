@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -179,7 +178,7 @@ next:
 
 func (st *workspaceStore) recordVersion(id string, revision uint64, record json.RawMessage, change []versionChange, kind string) {
 	if err := st.writeVersion(id, revision, record, change, kind); err != nil {
-		log.Printf("project %s version history: %v", id, err)
+		logError("project %s version history: %v", id, err)
 	}
 }
 func (st *workspaceStore) writeVersion(id string, revision uint64, record json.RawMessage, change []versionChange, kind string) error {
@@ -530,13 +529,13 @@ func (s *Server) versionRoutes(mux *http.ServeMux) {
 				j, err = s.jobs.Rehydrate(s.clientIP(r), request, src, record)
 			}
 			if err != nil {
-				log.Printf("project %s version %d slice: %v", id, v.ID, err)
+				logError("project %s version %d slice: %v", id, v.ID, err)
 				workspaceFailure(w, 503, "slice_unavailable", "The kept slice could not be opened.", "slice_again", 0)
 				return
 			}
 			v.Slice.Job = j.ID
 			if err := st.saveVersions(id, x); err != nil {
-				log.Printf("project %s version %d slice job: %v", id, v.ID, err)
+				logError("project %s version %d slice job: %v", id, v.ID, err)
 			}
 			writeJSON(w, 200, j.View())
 		})

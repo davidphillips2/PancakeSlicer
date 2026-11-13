@@ -282,7 +282,7 @@ func init() {
 	jobResultPut = storeJobResult
 	jobResultWarm = func(m *JobManager) {
 		if _, err := cacheForManager(m); err != nil {
-			log.Printf("result cache unavailable: %v", err)
+			logWarn("result cache unavailable: %v", err)
 		}
 		for _, current := range []string{presetCacheDir(m), stageCacheDir(m)} {
 			if current == "" {
@@ -399,7 +399,7 @@ func restoreJobResult(m *JobManager, j *Job, args []string) bool {
 	}
 	state, err := cacheForManager(m)
 	if err != nil {
-		log.Printf("result cache unavailable: %v", err)
+		logWarn("result cache unavailable: %v", err)
 		return false
 	}
 	if state == nil {
@@ -418,7 +418,7 @@ func restoreJobResult(m *JobManager, j *Job, args []string) bool {
 	}
 	key, err := state.cache.Key(filepath.Join(j.Dir, "input"), effective)
 	if err != nil {
-		log.Printf("result cache hash: %v", err)
+		logWarn("result cache hash: %v", err)
 		return false
 	}
 	marker := state.cache.artifact + "\n" + key
@@ -463,7 +463,7 @@ func storeJobResult(m *JobManager, j *Job, _ []string, raw []byte) {
 	}
 	started := time.Now()
 	if err := state.cache.Store(strings.TrimPrefix(string(marker), prefix), j.Dir, raw); err != nil {
-		log.Printf("result cache store bypassed: %v", err)
+		logWarn("result cache store bypassed: %v", err)
 	} else {
 		log.Printf("result cache stored in %s", time.Since(started))
 	}

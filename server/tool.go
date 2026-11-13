@@ -154,7 +154,7 @@ func probeTool(c Config, f *ToolFeatures) *cachedResponse {
 	fallback := cacheResponse(optionData)
 	b, err := toolDump(c, "--dump-options")
 	if err != nil {
-		log.Printf("using legacy tool contract: %v", err)
+		logWarn("using legacy tool contract: %v", err)
 		return fallback
 	}
 	var dump struct {
@@ -162,7 +162,7 @@ func probeTool(c Config, f *ToolFeatures) *cachedResponse {
 		Options []json.RawMessage `json:"options"`
 	}
 	if err := json.Unmarshal(b, &dump); err != nil || dump.Schema != "orca.options.v1" || len(dump.Options) == 0 {
-		log.Print("using legacy tool contract: invalid options dump")
+		logWarn("using legacy tool contract: invalid options dump")
 		return fallback
 	}
 	nativeSupport := false
@@ -172,7 +172,7 @@ func probeTool(c Config, f *ToolFeatures) *cachedResponse {
 		var option toolOption
 		var value map[string]any
 		if json.Unmarshal(raw, &option) != nil || json.Unmarshal(raw, &value) != nil || option.Key == "" || option.Type == "" {
-			log.Print("using legacy tool contract: invalid option entry")
+			logWarn("using legacy tool contract: invalid option entry")
 			return fallback
 		}
 		if option.Key == "support_style" {
@@ -218,7 +218,7 @@ func probeTool(c Config, f *ToolFeatures) *cachedResponse {
 	}
 	response, err := cacheJSON(options)
 	if err != nil {
-		log.Printf("using legacy tool contract: %v", err)
+		logWarn("using legacy tool contract: %v", err)
 		return fallback
 	}
 	configKinds = kinds

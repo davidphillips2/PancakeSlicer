@@ -175,7 +175,7 @@ func (m *SendManager) watchTrust(p *PrinterConfig) {
 				next.Fingerprint = "sha256:" + hex.EncodeToString(fp)
 			}
 			if err := m.replace(p, &next); err != nil {
-				log.Printf("warning: cannot record printer %q certificate: %v", p.Name, err)
+				logWarn("cannot record printer %q certificate: %v", p.Name, err)
 				return
 			}
 			m.hub.changed()

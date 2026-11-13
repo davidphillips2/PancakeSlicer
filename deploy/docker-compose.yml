@@ -14,6 +14,7 @@ services:
       ORCA_WEB_PRINTER_NETWORK: lan           # lan | off | comma-separated CIDRs/host names
       PANCAKE_STAGE_CACHE_MAX_MB: "1024"      # engine stage cache cap (disposable)
       # ORCA_WEB_BEARER_TOKEN: change-me      # require a token for changes (recommended if exposed)
+      # ORCA_WEB_REQUEST_LOG: "1"             # one JSON line per HTTP request in docker logs
     volumes:
       - pancakeslicer-data:/data              # projects, profiles, printers, preferences, jobs
       # - pancakeslicer-cache:/data/jobs/stage-cache   # optional: keep the disposable cache out of backups

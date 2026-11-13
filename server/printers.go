@@ -325,7 +325,7 @@ var transferTransitions = map[TransferState]map[TransferState]bool{
 
 func (t *Transfer) to(next TransferState) bool {
 	if !transferTransitions[t.State][next] {
-		log.Printf("send %s: illegal transition %s -> %s", t.ID, t.State, next)
+		logError("send %s: illegal transition %s -> %s", t.ID, t.State, next)
 		return false
 	}
 	t.State = next

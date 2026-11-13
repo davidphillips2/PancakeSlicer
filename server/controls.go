@@ -194,7 +194,7 @@ func (m *JobManager) completed(j *Job) {
 		j.mu.Unlock()
 	}
 	if err := m.quotaLocked(); err != nil {
-		log.Printf("job quota: %v", err)
+		logError("job quota: %v", err)
 	}
 }
 
@@ -329,7 +329,11 @@ func logFailure(r *http.Request, recorder *requestWriter) {
 	if detail == "" {
 		detail = logPrefix(body.Error, 160)
 	}
-	log.Printf("%s %s -> %d %s", logPrefix(r.Method, 32), logPrefix(r.URL.Path, 256), recorder.status, detail)
+	if recorder.status >= 500 {
+		logError("%s %s -> %d %s", logPrefix(r.Method, 32), logPrefix(r.URL.Path, 256), recorder.status, detail)
+	} else {
+		logWarn("%s %s -> %d %s", logPrefix(r.Method, 32), logPrefix(r.URL.Path, 256), recorder.status, detail)
+	}
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {
@@ -341,7 +345,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				if v == http.ErrAbortHandler {
 					panic(v)
 				}
-				log.Printf("%s %s panic: %v\n%s", logPrefix(r.Method, 32), logPrefix(r.URL.Path, 256), v, debug.Stack())
+				logError("%s %s panic: %v\n%s", logPrefix(r.Method, 32), logPrefix(r.URL.Path, 256), v, debug.Stack())
 				if recorder.status == 0 {
 					fail(recorder, 500, "Oops! Something went wrong on the server.")
 				}
@@ -382,7 +386,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				if id == "" {
 					id = strings.TrimPrefix(w.Header().Get("Location"), "/api/jobs/")
 				}
-				b, _ := json.Marshal(map[string]any{"method": logPrefix(r.Method, 32), "path": logPrefix(r.URL.Path, 1024), "status": status, "duration_ms": float64(time.Since(started).Microseconds()) / 1000, "client": s.clientIP(r), "job_id": logPrefix(id, 128)})
+				b, _ := json.Marshal(map[string]any{"ts": time.Now().UTC().Format(time.RFC3339Nano), "level": "info", "method": logPrefix(r.Method, 32), "path": logPrefix(r.URL.Path, 1024), "status": status, "duration_ms": float64(time.Since(started).Microseconds()) / 1000, "client": s.clientIP(r), "job_id": logPrefix(id, 128)})
 				log.Writer().Write(append(b, '\n'))
 			}()
 		}

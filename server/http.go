@@ -1436,7 +1436,7 @@ func moveHealth(table map[HealthState]map[HealthState]bool, field *HealthState, 
 		return true
 	}
 	if !table[*field][next] {
-		log.Printf("illegal %s transition %s -> %s", what, *field, next)
+		logError("illegal %s transition %s -> %s", what, *field, next)
 		return false
 	}
 	log.Printf("%s %s -> %s", what, *field, next)

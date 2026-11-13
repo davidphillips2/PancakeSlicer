@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 )
@@ -46,7 +45,7 @@ func (s *Server) reconcileStoredConnections(reason string) {
 		return
 	}
 	if err != nil {
-		log.Printf("printer connections: not reconciled with the library (%s): %v", reason, err)
+		logError("printer connections: not reconciled with the library (%s): %v", reason, err)
 		return
 	}
 	s.reconcileConnections(doc, reason)
@@ -59,7 +58,7 @@ func (s *Server) reconcileConnections(doc map[string]json.RawMessage, reason str
 	}
 	live, err := livePrinterProfiles(doc)
 	if err != nil {
-		log.Printf("printer connections: not reconciled with the library (%s): %v", reason, err)
+		logError("printer connections: not reconciled with the library (%s): %v", reason, err)
 		return
 	}
 	m.mu.Lock()
@@ -90,7 +89,7 @@ func (s *Server) reconcileConnections(doc map[string]json.RawMessage, reason str
 	kept := []*PrinterConfig{}
 	for _, p := range m.conns {
 		if why[p] != "" && m.busy[p.Printer] && p.Printer != "" {
-			log.Printf("printer connections: %q (%s) kept until its upload finishes; %s", p.Name, p.id, why[p])
+			logWarn("printer connections: %q (%s) kept until its upload finishes; %s", p.Name, p.id, why[p])
 			delete(why, p)
 		}
 		if why[p] == "" {
@@ -100,7 +99,7 @@ func (s *Server) reconcileConnections(doc map[string]json.RawMessage, reason str
 	m.store.printers = kept
 	if err := m.store.save(); err != nil {
 		m.store.printers = m.conns
-		log.Printf("printer connections: cannot save the reconciled connections (%s): %v", reason, err)
+		logError("printer connections: cannot save the reconciled connections (%s): %v", reason, err)
 		return
 	}
 	for _, p := range m.conns {
@@ -109,7 +108,7 @@ func (s *Server) reconcileConnections(doc map[string]json.RawMessage, reason str
 		}
 		os.Remove(p.CredentialFile)
 		m.cameras.disconnect(p.Printer)
-		log.Printf("printer connections: removed %q (%s, %s %s, setup %q) on %s: %s", p.Name, p.id, p.Kind, p.Serial, p.Printer, reason, why[p])
+		logWarn("printer connections: removed %q (%s, %s %s, setup %q) on %s: %s", p.Name, p.id, p.Kind, p.Serial, p.Printer, reason, why[p])
 		audit(map[string]any{"event": "connection_removed", "printer": p.Printer, "id": p.id, "serial": p.Serial, "reason": why[p], "trigger": reason})
 	}
 	m.conns = kept

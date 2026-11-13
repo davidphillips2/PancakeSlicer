@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,7 +40,7 @@ func profileSelectionProblem(code, kind, name, vendor string, slot int) *profile
 	return p
 }
 func profileCatalogProblem(vendor string, err error) *profileProblem {
-	log.Printf("profile catalog %s: %v", presetDisplayName(vendor), err)
+	logError("profile catalog %s: %v", presetDisplayName(vendor), err)
 	return &profileProblem{Message: "Profiles could not be loaded. Reload the profile catalog and try again.", Code: "profile_catalog_unavailable", Recovery: "reload_profiles", Profile: profileReference{Kind: "vendor", Name: vendor, Vendor: vendor}, status: 503}
 }
 func profileCompatible(p *Preset, printer, process string, filament bool) bool {

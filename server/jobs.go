@@ -593,7 +593,7 @@ func (m *JobManager) reap() {
 		case now := <-t.C:
 			m.mu.Lock()
 			if err := m.quotaLocked(); err != nil {
-				log.Printf("job quota: %v", err)
+				logError("job quota: %v", err)
 			}
 			for client, bucket := range m.buckets {
 				if now.Sub(bucket.at).Seconds()*m.cfg.SubmitRate >= float64(m.cfg.SubmitBurst) {
@@ -613,7 +613,7 @@ func (m *JobManager) reap() {
 			m.mu.Unlock()
 			for _, j := range old {
 				if err := m.Remove(j); err != nil {
-					log.Printf("expire job %s: %v", j.ID, err)
+					logError("expire job %s: %v", j.ID, err)
 				}
 			}
 		}
@@ -789,6 +789,31 @@ func (m *JobManager) toolArgs(j *Job) []string {
 }
 
 func (m *JobManager) run(ctx context.Context, j *Job) {
+	started := time.Now()
+	m.execute(ctx, j)
+	j.mu.Lock()
+	state, reason, exit := j.state, j.errMsg, j.exitCode
+	j.mu.Unlock()
+	elapsed := time.Since(started).Round(time.Second)
+	switch {
+	case state == StateDone && exit != nil:
+		log.Printf("job %s done in %s (exit %d)", j.ID, elapsed, *exit)
+	case state == StateDone:
+		log.Printf("job %s done in %s", j.ID, elapsed)
+	case state == StateFailed:
+		code := "no exit"
+		if exit != nil {
+			code = fmt.Sprintf("exit %d", *exit)
+		}
+		logError("job %s failed after %s (%s): %s", j.ID, elapsed, code, reason)
+	case state == StateCancelled:
+		log.Printf("job %s cancelled after %s", j.ID, elapsed)
+	case state.Finished():
+		logWarn("job %s %s after %s: %s", j.ID, state, elapsed, reason)
+	}
+}
+
+func (m *JobManager) execute(ctx context.Context, j *Job) {
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.JobTimeout)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -804,6 +829,11 @@ func (m *JobManager) run(ctx context.Context, j *Job) {
 	if overlayOutput(j.Request.Output) && m.previewCached(j, args) {
 		return
 	}
+	what := j.Request.Filename
+	if what == "" {
+		what = j.Request.Calib
+	}
+	log.Printf("job %s: %s -> %s (%s)", j.ID, what, j.Request.Output, j.Request.Printer)
 
 	if err := copyUserHeads(m.cfg, filepath.Join(j.Dir, "datadir")); err != nil {
 		j.setState(StateFailed, "cannot copy the user heads: "+err.Error())
@@ -1015,7 +1045,6 @@ func (m *JobManager) run(ctx context.Context, j *Job) {
 		}
 		j.setState(StateDone, "")
 	}
-	log.Printf("job %s %s (exit %d)", j.ID, j.State(), code)
 }
 
 func overlayOutput(output string) bool { return output == "patch-preview" || output == "plan-tops" }
@@ -1157,7 +1186,7 @@ func (m *JobManager) reserve(ctx context.Context, key string) (*Job, func(*Job),
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if e.settled {
-				log.Printf("idempotency key %q settled twice; keeping its first outcome", key)
+				logWarn("idempotency key %q settled twice; keeping its first outcome", key)
 				return
 			}
 			e.settled = true

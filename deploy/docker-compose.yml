@@ -17,6 +17,8 @@ services:
       # ORCA_WEB_REQUEST_LOG: "1"             # one JSON line per HTTP request in docker logs
     volumes:
       - pancakeslicer-data:/data              # projects, profiles, printers, preferences, jobs
+      # optional: a modified Bambu CA can live in the data dir as cert/printer.cer
+      # (host path appdata/pancakeslicer/cert/printer.cer) instead of overriding engine resources
       # - pancakeslicer-cache:/data/jobs/stage-cache   # optional: keep the disposable cache out of backups
     security_opt:
       - no-new-privileges:true

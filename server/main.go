@@ -168,7 +168,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if hosts != nil {
-		if cfg.PrinterStore, err = loadPrinterStore(filepath.Join(cfg.DataDir, "printers"), cfg.Resources, hosts); err != nil {
+		if cfg.PrinterStore, err = loadPrinterStore(filepath.Join(cfg.DataDir, "printers"), cfg.DataDir, cfg.Resources, hosts); err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("printer connections: %d saved; printers may live at %s", len(cfg.PrinterStore.printers), hosts)

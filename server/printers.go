@@ -10,12 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -75,7 +77,21 @@ func (p *PrinterConfig) view() ConnectionView {
 
 var bambuSerial = regexp.MustCompile(`^[A-Za-z0-9]{6,32}$`)
 
-func (p *PrinterConfig) validate(resources string) error {
+func bambuCert(resources, dataDir string) (string, []byte, error) {
+	if dataDir != "" {
+		override := filepath.Join(dataDir, "cert", "printer.cer")
+		if pem, err := os.ReadFile(override); err == nil {
+			return override, pem, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return override, nil, err
+		}
+	}
+	bundled := filepath.Join(resources, "cert", "printer.cer")
+	pem, err := os.ReadFile(bundled)
+	return bundled, pem, err
+}
+
+func (p *PrinterConfig) validate(resources, dataDir string) error {
 	if len(p.Name) > 200 || strings.IndexFunc(p.Name, unicode.IsControl) >= 0 {
 		return errors.New("Printer name must be 200 characters or fewer (with no control characters).")
 	}
@@ -114,13 +130,13 @@ func (p *PrinterConfig) validate(resources string) error {
 			return errors.New("Bambu Lab printers use Bambu-signed certificates—set TLS mode to bambu-ca or pin.")
 		}
 		if p.TLS == "bambu-ca" || p.TLS == "tofu" {
-			pem, err := os.ReadFile(resources + "/cert/printer.cer")
+			path, pem, err := bambuCert(resources, dataDir)
 			if err != nil {
-				return fmt.Errorf("tls bambu-ca needs resources/cert/printer.cer: %w", err)
+				return fmt.Errorf("tls bambu-ca needs cert/printer.cer in the data dir or engine resources: %w", err)
 			}
 			p.bambuRoots = x509.NewCertPool()
 			if !p.bambuRoots.AppendCertsFromPEM(pem) {
-				return errors.New("resources/cert/printer.cer holds no certificates")
+				return errors.New(path + " holds no certificates")
 			}
 		}
 	case "bambu-connect":

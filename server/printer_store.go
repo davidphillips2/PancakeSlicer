@@ -21,6 +21,7 @@ import (
 
 type printerStore struct {
 	dir       string
+	dataDir   string
 	resources string
 	hosts     *hostPolicy
 	printers  []*PrinterConfig
@@ -41,8 +42,8 @@ type storedPrinter struct {
 	Username    string `json:"username,omitempty"`
 }
 
-func loadPrinterStore(dir, resources string, hosts *hostPolicy) (*printerStore, error) {
-	st := &printerStore{dir: dir, resources: resources, hosts: hosts}
+func loadPrinterStore(dir, dataDir, resources string, hosts *hostPolicy) (*printerStore, error) {
+	st := &printerStore{dir: dir, dataDir: dataDir, resources: resources, hosts: hosts}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -108,7 +109,7 @@ func (st *printerStore) config(sp storedPrinter) (*PrinterConfig, error) {
 		}
 		p.URL = u.String()
 	}
-	return p, p.validate(st.resources)
+	return p, p.validate(st.resources, st.dataDir)
 }
 
 func (st *printerStore) stored(p *PrinterConfig) storedPrinter {

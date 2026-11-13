@@ -62,6 +62,14 @@ const filamentColoursOf = (settings: Config): string[] => {
   return (Array.isArray(value) ? value : typeof value === 'string' ? value.split(';') : []).map((c) => String(c ?? ''));
 };
 
+const uniformProfile = (profile: number[]): boolean => {
+  if (profile.length < 6 || profile.length % 2) return false;
+  const [_, first, second, third] = profile;
+  if (second !== first || third !== first) return false;
+  for (let i = 5; i < profile.length; i += 2) if (profile[i] !== profile[profile.length - 1]) return false;
+  return true;
+};
+
 async function importObjectsNative(file: File, allowNew: boolean, sourceUrl?: string): Promise<number> {
   const generation = documentGeneration();
   const task = importing.begin('loading');
@@ -71,7 +79,10 @@ async function importObjectsNative(file: File, allowNew: boolean, sourceUrl?: st
     const { explodeProject } = await import('./explode');
     const result = await explodeProject(file);
     if (!task.current()) return 0;
-    for (const plate of result.plates) for (const object of plate.objects) if (sourceUrl) object.sourceUrl = sourceUrl;
+    for (const plate of result.plates) for (const object of plate.objects) {
+      if (sourceUrl) object.sourceUrl = sourceUrl;
+      if (object.layerProfile && uniformProfile(object.layerProfile)) delete object.layerProfile;
+    }
     const objects = result.plates.flatMap((p) => p.objects);
     if (!objects.length) throw new Error(`${file.name}: no 3D meshes found in this file`);
     const choice = await importObjectsDialog(file.name, objects.length, [], allowNew);

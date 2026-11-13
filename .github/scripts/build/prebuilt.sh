@@ -6,12 +6,13 @@
 set -euo pipefail
 release=prebuilt
 repo=${GITHUB_REPOSITORY:-ZimengXiong/PancakeSlicer}
+fallback=${PREBUILT_FALLBACK_REPO:-}
 cmd=$1 asset=$2 dir=$3
 shift 3
 
 assets() {
-  local out
-  if out=$(gh release view "$release" --repo "$repo" --json assets --jq '.assets[].name' 2>&1); then
+  local r=$1 out
+  if out=$(gh release view "$release" --repo "$r" --json assets --jq '.assets[].name' 2>&1); then
     printf '%s\n' "$out"
   elif grep -q 'release not found' <<<"$out"; then
     return 0
@@ -23,10 +24,15 @@ assets() {
 
 case "$cmd" in
   fetch)
-    names=$(assets)
+    source=$repo
+    if ! grep -qxF "$asset" <<<"$(assets "$repo")" && [ -n "$fallback" ] && grep -qxF "$asset" <<<"$(assets "$fallback")"; then
+      source=$fallback
+      echo "Using $fallback for $asset" >&2
+    fi
+    names=$(assets "$source")
     if ! grep -qxF "$asset" <<<"$names"; then echo "$asset is not published"; exit 3; fi
     tmp=$(mktemp -d)
-    gh release download "$release" --repo "$repo" --pattern "$asset" --dir "$tmp"
+    gh release download "$release" --repo "$source" --pattern "$asset" --dir "$tmp"
     mkdir -p "$dir"
     tar -xzf "$tmp/$asset" -C "$dir"
     echo "Fetched $asset ($(du -h "$tmp/$asset" | cut -f1))"

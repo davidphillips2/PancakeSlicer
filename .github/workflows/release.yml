@@ -37,6 +37,7 @@ permissions:
 env:
   TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag || 'v0.0.0-main' }}
   PUBLISH: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.publish == true }}
+  PREBUILT_FALLBACK_REPO: ZimengXiong/PancakeSlicer
   CMAKE_POLICY_VERSION_MINIMUM: '3.10'
   CMAKE_BUILD_PARALLEL_LEVEL: '4'
   CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -326,12 +327,17 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           version="${TAG#v}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-          for repo in ghcr.io/zimengxiong/pancakeslicer docker.io/zimengxiong/pancakeslicer; do
+          repos=("ghcr.io/$owner/pancakeslicer")
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            repos+=("docker.io/$DOCKERHUB_USERNAME/pancakeslicer")
+          fi
+          for repo in "${repos[@]}"; do
             for t in "$version" latest; do docker tag pancakeslicer:ci "$repo:$t"; docker push "$repo:$t"; done
           done
-          docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/zimengxiong/pancakeslicer:$version
+          docker inspect --format '{{index .RepoDigests 0}}' "ghcr.io/$owner/pancakeslicer:$version"
 
   desktop:
     name: ${{ matrix.target }}

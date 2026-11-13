@@ -206,8 +206,8 @@ function nativeEntry(o: PlateObject, settings: (c: Config) => Record<string, str
     }
     return { transform: rows(instanceMatrix(o, i).multiply(frame)), printable: i.printable !== false, ...(nat ? { identify_id: nat.json.identify_id } : {}) };
   });
-  const { volumes: _v, instances: _i, layer_height_profile: lhp, ranges: _r, settings: _s, extruder: _e, name: _n, ...rest } = n.entry;
-  const lh = o.layerProfile === n.layerProfile ? lhp : profile();
+  const { volumes: _v, instances: _i, layer_height_profile: _lhp, ranges: _r, settings: _s, extruder: _e, name: _n, ...rest } = n.entry;
+  const lh = profile();
   return {
     entry: {
       ...rest, name: o.name, extruder: o.extruder, settings: settings(o.settings), volumes: out, instances,

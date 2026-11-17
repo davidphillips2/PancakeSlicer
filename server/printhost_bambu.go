@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"regexp"
@@ -113,7 +114,7 @@ func dialError(err error, host string, port int) error {
 	case errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH):
 		msg = fmt.Sprintf("no route from the server to %s", host)
 	case errors.As(err, &dns):
-		msg = "cannot resolve " + host
+		msg = "couldn't find " + host
 	}
 	return &connError{"unreachable", msg}
 }
@@ -404,35 +405,30 @@ func mqttProjectFile(ctx context.Context, p *PrinterConfig, u *upload, plate, md
 	defer conn.Close()
 	sequence := strconv.FormatInt(time.Now().UnixMilli()%1_000_000_000, 10)
 	name := strings.TrimSuffix(u.filename, ".gcode.3mf")
-	mapping := []int{}
-	if u.options.amsMapping != nil {
-		mapping = u.options.amsMapping
-	} else if u.options.useAMS {
-		mapping = []int{0}
-	}
-	legacyMapping, addresses, err := bambuMapping(mapping, u.options.amsMapping2, len(mapping))
-	if err != nil {
-		return fail(err)
+	legacyMapping, addresses := u.options.amsMapping, u.options.amsMapping2
+	if legacyMapping == nil {
+		legacyMapping, addresses = []int{}, []bambuTrayAddress{}
 	}
 	if err := mqttPublish(conn, p, map[string]any{"print": map[string]any{
 		"sequence_id": sequence, "command": "project_file", "param": plate,
 		"project_id": "0", "profile_id": "0", "task_id": "0", "subtask_id": "0", "subtask_name": name,
 		"file": u.filename, "url": "file:///sdcard/" + u.filename, "md5": md5sum,
 		"timelapse": u.options.timelapse, "bed_type": "auto", "bed_leveling": u.options.bedLeveling, "flow_cali": u.options.flowCali,
-		"vibration_cali": u.options.vibrationCali, "layer_inspect": false, "use_ams": u.options.useAMS, "ams_mapping": legacyMapping, "ams_mapping_2": addresses,
+		"vibration_cali": u.options.vibrationCali, "layer_inspect": false, "use_ams": u.options.useAMS, "ams_mapping": legacyMapping, "ams_mapping2": addresses,
 	}}); err != nil {
 		return fail(err)
 	}
-	conn.SetDeadline(time.Now().Add(20 * time.Second))
-	for {
+	start := &bambuStart{state: StartSending}
+	conn.SetDeadline(time.Now().Add(bambuStartWindow))
+	for start.state == StartSending {
 		kind, body, err := mqttRead(r)
 		if err != nil {
-			if os.IsTimeout(err) {
-				mqttWrite(conn, 0xE0, nil)
-				u.outcome = "waiting_for_printer"
-				return "Sent, waiting for the printer to start. No confirmation within 20 s; check its screen before sending again.", nil
+			if os.IsTimeout(err) && ctx.Err() == nil {
+				start.to(StartUnconfirmed, nil)
+			} else {
+				start.to(StartFailed, err)
 			}
-			return fail(err)
+			break
 		}
 		payload := mqttPayload(kind, body)
 		if payload == nil {
@@ -440,14 +436,9 @@ func mqttProjectFile(ctx context.Context, p *PrinterConfig, u *upload, plate, md
 		}
 		var message struct {
 			Print struct {
-				Command   string `json:"command"`
-				Sequence  string `json:"sequence_id"`
-				Result    string `json:"result"`
-				Reason    string `json:"reason"`
+				bambuEcho
 				State     string `json:"gcode_state"`
 				Subtask   string `json:"subtask_name"`
-				ErrorCode int    `json:"print_error"`
-				ErrCode   int    `json:"err_code"`
 				GcodeFile string `json:"gcode_file"`
 			} `json:"print"`
 		}
@@ -455,27 +446,61 @@ func mqttProjectFile(ctx context.Context, p *PrinterConfig, u *upload, plate, md
 			continue
 		}
 		m := message.Print
-		if m.Command == "project_file" && m.Sequence == sequence {
-			if strings.EqualFold(m.Result, "success") {
-				mqttWrite(conn, 0xE0, nil)
-				u.outcome = "printing"
-				return u.placed() + " and started printing.", nil
-			}
-			reason := m.Reason
-			if reason == "" {
-				reason = m.Result
-			}
+		switch {
+		case m.Command == "project_file" && m.Sequence == sequence && m.ErrCode == 0 && strings.EqualFold(m.Result, "success"):
+			start.to(StartAccepted, nil)
+		case m.Command == "project_file" && m.Sequence == sequence:
+			reason := cmpOr(m.Reason, m.Result)
 			if refusedForAuth(m.Result, m.Reason, m.ErrCode) {
-				return fail(fmt.Errorf("The printer declined the start command (%s)—make sure LAN Only mode and Developer Mode are enabled on the printer.", reason))
+				start.to(StartFailed, &connError{"developer_mode", fmt.Sprintf("the printer declined the start command (%s); turn on LAN Only mode and Developer Mode on the printer", reason)})
+			} else {
+				start.to(StartFailed, &connError{"refused", fmt.Sprintf("the printer declined the print job: %s (code %d)", reason, m.ErrCode)})
 			}
-			return fail(fmt.Errorf("The printer declined the print job: %s", reason))
-		}
-		if (m.State == "PREPARE" || m.State == "RUNNING") && (m.Subtask == name || m.GcodeFile == u.filename) {
-			mqttWrite(conn, 0xE0, nil)
-			u.outcome = "printing"
-			return u.placed() + " and started printing.", nil
+		case (m.State == "PREPARE" || m.State == "RUNNING") && (m.Subtask == name || m.GcodeFile == u.filename):
+			start.to(StartAccepted, nil)
 		}
 	}
+	mqttWrite(conn, 0xE0, nil)
+	switch start.state {
+	case StartAccepted:
+		u.outcome = "printing"
+		return u.placed() + " and started printing.", nil
+	case StartUnconfirmed:
+		u.outcome = "unconfirmed"
+		return u.placed() + ", but " + p.Name + " hasn't confirmed that the print started. Check its screen before sending again.", nil
+	}
+	return fail(start.err)
+}
+
+type StartState string
+
+const (
+	StartSending     StartState = "sending"
+	StartAccepted    StartState = "accepted"
+	StartFailed      StartState = "failed"
+	StartUnconfirmed StartState = "unconfirmed"
+)
+
+var startTransitions = map[StartState]map[StartState]bool{
+	StartSending:     {StartAccepted: true, StartFailed: true, StartUnconfirmed: true},
+	StartAccepted:    {},
+	StartFailed:      {},
+	StartUnconfirmed: {},
+}
+
+const bambuStartWindow = 20 * time.Second
+
+type bambuStart struct {
+	state StartState
+	err   error
+}
+
+func (s *bambuStart) to(next StartState, err error) {
+	if !startTransitions[s.state][next] {
+		log.Printf("bambu start: illegal transition %s -> %s", s.state, next)
+		return
+	}
+	s.state, s.err = next, err
 }
 
 func mqttString(s string) []byte {
@@ -582,7 +607,7 @@ func testBambu(ctx context.Context, p *PrinterConfig, secret string) PrinterTest
 		if m := message.Print; m.Command == "gcode_line" && m.Sequence == sequence {
 			if refusedForAuth(m.Result, m.Reason, m.ErrCode) {
 				mqttWrite(conn, 0xE0, nil)
-				return PrinterTest{Stage: "developer_mode", Message: "the printer refused a LAN command (" + m.Reason + ")"}
+				return PrinterTest{Stage: "developer_mode", Message: "the printer turned down a LAN command (" + m.Reason + ")"}
 			}
 			answered = true
 		}
@@ -620,7 +645,7 @@ func testBambu(ctx context.Context, p *PrinterConfig, secret string) PrinterTest
 		message += " to " + model
 	}
 	if !answered {
-		message += "; the printer did not answer the test command, so Developer Mode is unconfirmed"
+		message += "; the printer didn't answer the test command, so Developer Mode isn't confirmed yet"
 	}
 	return PrinterTest{OK: true, Stage: "ok", Message: message, Model: model}
 }
@@ -878,7 +903,7 @@ func amsBambu(ctx context.Context, p *PrinterConfig, secret string) ([]AMSTray, 
 	}
 }
 
-func monitorBambu(ctx context.Context, p *PrinterConfig, secret string, publish func(PrinterStatus)) error {
+func monitorBambu(ctx context.Context, p *PrinterConfig, secret string, publish func(PrinterStatus), heard func(bambuHeard)) error {
 	conn, r, err := mqttSession(ctx, p, secret)
 	if err != nil {
 		return err
@@ -889,7 +914,7 @@ func monitorBambu(ctx context.Context, p *PrinterConfig, secret string, publish 
 		return err
 	}
 	state := map[string]any{}
-	heard := time.Now()
+	last := time.Now()
 	for {
 		conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		kind, body, err := mqttRead(r)
@@ -897,7 +922,7 @@ func monitorBambu(ctx context.Context, p *PrinterConfig, secret string, publish 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if os.IsTimeout(err) && time.Since(heard) < 65*time.Second {
+			if os.IsTimeout(err) && time.Since(last) < 65*time.Second {
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if err := mqttWrite(conn, 0xC0, nil); err != nil {
 					return netError(err, "the printer (MQTT port 8883)")
@@ -906,7 +931,7 @@ func monitorBambu(ctx context.Context, p *PrinterConfig, secret string, publish 
 			}
 			return netError(err, "the printer (MQTT port 8883)")
 		}
-		heard = time.Now()
+		last = time.Now()
 		var message struct {
 			Print map[string]any `json:"print"`
 		}
@@ -916,58 +941,57 @@ func monitorBambu(ctx context.Context, p *PrinterConfig, secret string, publish 
 		mergeReport(state, message.Print)
 		raw, _ := json.Marshal(state)
 		var report bambuReport
+		r := bambuHeard{full: message.Print["msg"] == float64(0)}
 		if json.Unmarshal(raw, &report) == nil && report.State != "" {
-			publish(report.status())
+			st := report.status()
+			publish(st)
+			r.status = &st
 		}
+		r.state = report.trays()
+		if ams, ok := message.Print["ams"].(map[string]any); ok {
+			_, r.trays = ams["ams"].([]any)
+		}
+		if command, _ := message.Print["command"].(string); command != "" && command != "push_status" {
+			echo := &bambuEcho{}
+			if b, err := json.Marshal(message.Print); err == nil && json.Unmarshal(b, echo) == nil {
+				r.echo = echo
+			}
+		}
+		heard(r)
 	}
 }
 
-func controlBambu(ctx context.Context, p *PrinterConfig, secret, action string) error {
-	return bambuCommand(ctx, p, secret, map[string]any{"command": action, "param": ""})
-}
-
-func bambuCommand(ctx context.Context, p *PrinterConfig, secret string, command map[string]any) error {
-	return bambuScopedCommand(ctx, p, secret, "print", command)
-}
-
-func bambuScopedCommand(ctx context.Context, p *PrinterConfig, secret, scope string, command map[string]any) error {
+func bambuPublish(ctx context.Context, p *PrinterConfig, secret, scope string, command map[string]any) (string, <-chan bambuEcho, func(), error) {
 	conn, r, err := mqttSession(ctx, p, secret)
 	if err != nil {
-		return err
+		return "", nil, nil, err
 	}
-	defer conn.Close()
 	sequence := strconv.FormatInt(time.Now().UnixMilli()%1_000_000_000, 10)
 	command["sequence_id"] = sequence
 	action, _ := command["command"].(string)
 	if err := mqttPublish(conn, p, map[string]any{scope: command}); err != nil {
-		return err
+		conn.Close()
+		return "", nil, nil, netError(err, "the printer (MQTT port 8883)")
 	}
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	for {
-		kind, body, err := mqttRead(r)
-		if err != nil {
-			mqttWrite(conn, 0xE0, nil)
-			return nil
-		}
-		var message map[string]struct {
-			Command  string `json:"command"`
-			Sequence string `json:"sequence_id"`
-			Result   string `json:"result"`
-			Reason   string `json:"reason"`
-			ErrCode  int    `json:"err_code"`
-		}
-		if json.Unmarshal(mqttPayload(kind, body), &message) != nil {
-			continue
-		}
-		if m := message[scope]; m.Command == action && m.Sequence == sequence {
-			mqttWrite(conn, 0xE0, nil)
-			if refusedForAuth(m.Result, m.Reason, m.ErrCode) {
-				return errors.New("The printer declined the command—make sure LAN Only mode and Developer Mode are turned on at the printer.")
+	echoes := make(chan bambuEcho, 4)
+	go func() {
+		defer close(echoes)
+		for {
+			kind, body, err := mqttRead(r)
+			if err != nil {
+				return
 			}
-			if m.ErrCode != 0 || m.Result != "" && !strings.EqualFold(m.Result, "success") {
-				return fmt.Errorf("The printer declined %s: %s (code %d)", action, cmpOr(m.Reason, m.Result), m.ErrCode)
+			var message map[string]bambuEcho
+			if json.Unmarshal(mqttPayload(kind, body), &message) != nil {
+				continue
 			}
-			return nil
+			if e := message[scope]; e.Command == action && e.Sequence == sequence {
+				select {
+				case echoes <- e:
+				default:
+				}
+			}
 		}
-	}
+	}()
+	return sequence, echoes, func() { mqttWrite(conn, 0xE0, nil); conn.Close() }, nil
 }

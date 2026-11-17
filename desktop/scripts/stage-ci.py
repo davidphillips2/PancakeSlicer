@@ -160,12 +160,13 @@ def main():
     elif args.os == 'win':
         windows_libraries(native, prefix, engine)
     else:
-        if sys.platform != 'linux' or args.arch != 'x64':
-            raise RuntimeError('The self-hosted image requires a native Linux x86_64 build')
+        if sys.platform != 'linux':
+            raise RuntimeError('Linux payloads are staged on Linux')
         run('strip', '--strip-unneeded', native)
     resources = engine / 'resources'
     for name in ['profiles', 'nonplanar', 'info', 'printers', 'filament_mixing', 'fonts', 'handy_models', 'calib', 'cert', 'flush']:
         shutil.copytree(ROOT / 'engine/resources' / name, resources / name)
+    run(tool, '--flatten-catalog', resources / 'catalog', '--profiles', ROOT / 'engine/resources/profiles')
     run(sys.executable, ROOT / 'desktop/scripts/compact-profiles.py', resources)
     shutil.copy2(ROOT / 'LICENSE', web / 'licence.txt')
     run(sys.executable, ROOT / 'desktop/scripts/bundle-native-notices.py', '--root', ROOT, '--web', web, '--prefix', prefix)
@@ -200,8 +201,8 @@ def main():
     command_prefix = []
     image = args.image or f'pancakeslicer:{revision[:10]}'
     if args.os == 'linux':
-        (build / '.dockerignore').write_text('**\n!engine-linux-x64/\n!engine-linux-x64/**\n!web/\n!web/**\n')
-        run('docker', 'build', '--file', ROOT / 'server/Dockerfile', '--tag', image, build)
+        (build / '.dockerignore').write_text(f'**\n!{engine.name}/\n!{engine.name}/**\n!web/\n!web/**\n')
+        run('docker', 'build', '--file', ROOT / 'server/Dockerfile', '--build-arg', f'ENGINE={engine.name}', '--tag', image, build)
         command_prefix = ['docker', 'run', '--rm', '--network', 'none', '--memory', '2g', '--memory-swap', '2g', '--cpus', '1', '--user', f'{os.getuid()}:{os.getgid()}',
                           '--mount', f'type=bind,src={engine},dst={engine},readonly',
                           '--mount', f'type=bind,src={qualification},dst={qualification}',
@@ -230,7 +231,7 @@ def main():
     payload_modes(engine, {native, server})
     payload_modes(web, set())
     if args.os == 'linux':
-        run('docker', 'build', '--file', ROOT / 'server/Dockerfile', '--tag', image, build)
+        run('docker', 'build', '--file', ROOT / 'server/Dockerfile', '--build-arg', f'ENGINE={engine.name}', '--tag', image, build)
         print(f'Self-hosted image: {image}')
         return
     if args.os == 'mac':

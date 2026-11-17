@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -102,7 +103,7 @@ func (st *printerStore) config(sp storedPrinter) (*PrinterConfig, error) {
 	}
 	p := &PrinterConfig{Printer: sp.Printer, Name: sp.Name, Kind: sp.Kind, Host: sp.Host, Serial: sp.Serial, TLS: sp.TLS, Fingerprint: sp.Fingerprint,
 		URL: sp.URL, Auth: sp.Auth, Username: sp.Username, CredentialFile: filepath.Join(st.dir, sp.ID+".code"), id: sp.ID, hosts: st.hosts, model: sp.Model}
-	if p.Kind != "bambu-lan" && p.Kind != "bambu-connect" {
+	if p.Kind != "bambu-lan" && p.Kind != "bambu-connect" && p.Kind != "flashforge" {
 		u, err := hostURL(sp.URL)
 		if err != nil {
 			return nil, err
@@ -201,7 +202,7 @@ type connectionEdit struct {
 }
 
 func (b *connectionEdit) secret() string {
-	if b.Kind == "bambu-lan" {
+	if b.Kind == "bambu-lan" || b.Kind == "flashforge" {
 		return b.AccessCode
 	}
 	return b.Key
@@ -209,27 +210,27 @@ func (b *connectionEdit) secret() string {
 
 func (s *Server) connectionBody(w http.ResponseWriter, r *http.Request) (*connectionEdit, bool) {
 	if s.sends.store == nil {
-		fail(w, 403, "Printer network connections are disabled on this server.")
+		fail(w, 403, "printer_network_connections_disabled")
 		return nil, false
 	}
 	var body connectionEdit
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
 	if err != nil || json.Unmarshal(raw, &body) != nil {
-		fail(w, 400, `expected {"kind", "host", "serial", "access_code"} or {"kind", "url", "key"}`)
+		fail(w, 400, "expected_kind_host_serial")
 		return nil, false
 	}
 	if connectionKinds[body.Kind] == "" {
-		fail(w, 400, "kind must be bambu-lan, bambu-connect, moonraker, octoprint, prusalink or duet")
+		fail(w, 400, "kind_must_bambu_lan")
 		return nil, false
 	}
 	body.Name, body.Host, body.Serial, body.AccessCode = strings.TrimSpace(body.Name), strings.TrimSpace(body.Host), strings.ToUpper(strings.TrimSpace(body.Serial)), strings.TrimSpace(body.AccessCode)
 	body.URL, body.Username = strings.TrimSpace(body.URL), strings.TrimSpace(body.Username)
 	if body.AccessCode != "" && (len(body.AccessCode) > 64 || strings.IndexFunc(body.AccessCode, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0) {
-		fail(w, 400, "Enter the 8-character access code shown under Settings › Network on your printer.")
+		fail(w, 400, "enter_character_access_code")
 		return nil, false
 	}
 	if len(body.Key) > 256 || strings.IndexFunc(body.Key, unicode.IsControl) >= 0 || len(body.Username) > 64 || strings.IndexFunc(body.Username, unicode.IsControl) >= 0 {
-		fail(w, 400, "The API key, username, or password is too long or contains invalid characters.")
+		fail(w, 400, "api_key_username_password")
 		return nil, false
 	}
 	if len(body.Model) > 60 || strings.IndexFunc(body.Model, unicode.IsControl) >= 0 {
@@ -239,7 +240,7 @@ func (s *Server) connectionBody(w http.ResponseWriter, r *http.Request) (*connec
 		body.Auth, body.Username = "", ""
 	}
 	if body.Auth != "" && body.Auth != "digest" {
-		fail(w, 400, "auth must be apikey or digest")
+		fail(w, 400, "auth_must_apikey_digest")
 		return nil, false
 	}
 	return &body, true
@@ -253,6 +254,9 @@ func (s *Server) editConfig(ctx context.Context, body *connectionEdit, sp stored
 	case "bambu-lan":
 		sp.Host, sp.Serial = body.Host, body.Serial
 		u = &url.URL{Scheme: "tcp", Host: body.Host + ":8883"}
+	case "flashforge":
+		sp.Host, sp.Serial = body.Host, body.Serial
+		u = &url.URL{Scheme: "tcp", Host: net.JoinHostPort(body.Host, "8899")}
 	case "bambu-connect":
 	default:
 		var err error
@@ -307,7 +311,7 @@ func (m *SendManager) connectionFor(key string) *PrinterConfig {
 func (s *Server) putConnection(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("printer")
 	if key == "" || len(key) > 300 || strings.HasPrefix(key, "unassigned:") || strings.IndexFunc(key, unicode.IsControl) >= 0 {
-		fail(w, 400, "The request URL needs to include the printer name.")
+		fail(w, 400, "request_url_needs_include")
 		return
 	}
 	body, ok := s.connectionBody(w, r)
@@ -328,41 +332,41 @@ func (s *Server) putConnection(w http.ResponseWriter, r *http.Request) {
 	_, statErr := os.Stat(filepath.Join(m.store.dir, sp.ID+".code"))
 	hasSecret := statErr == nil && (prev == nil || prev.Kind == body.Kind)
 	if secretRequired(body.Kind) && body.secret() == "" && !hasSecret {
-		fail(w, 400, map[bool]string{true: "enter the printer's access code (Settings > Network on the printer)", false: "enter the printer's API key or password"}[body.Kind == "bambu-lan"])
+		fail(w, 400, map[bool]string{true: "enter_access_code", false: "enter_api_key_or_password"}[body.Kind == "bambu-lan"])
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	p, err := s.editConfig(ctx, body, sp)
 	if err != nil {
-		fail(w, 400, err.Error())
+		fail(w, 400, "printer_store_invalid", err.Error())
 		return
 	}
 	if why := s.connectionConflict(key, p.Serial, prev); why != "" {
-		fail(w, 409, why)
+		fail(w, 409, "printer_store_conflict", why)
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.printerLocked(key) != prev {
-		fail(w, 409, "This printer's connection settings were just updated elsewhere—please try again.")
+		fail(w, 409, "printers_connection_settings_were")
 		return
 	}
 	if prev != nil && m.busy[key] {
-		fail(w, 409, "This printer is currently receiving a file upload—wait for it to finish before changing connection settings.")
+		fail(w, 409, "printer_currently_receiving_file")
 		return
 	}
 	switch secret := body.secret(); {
 	case secret != "":
 		if err := writeFileAtomic(p.CredentialFile, []byte(secret+"\n")); err != nil {
-			fail(w, 500, "Oops! Couldn't save the printer's access code or password on the server.")
+			fail(w, 500, "couldnt_save_printers_access")
 			return
 		}
 	case body.ClearKey && !secretRequired(body.Kind) || prev != nil && prev.Kind != body.Kind || body.Kind == "bambu-connect":
 		os.Remove(p.CredentialFile)
 	}
 	if err := m.replace(prev, p); err != nil {
-		fail(w, 500, "Oops! Couldn't save the printer connection.")
+		fail(w, 500, "couldnt_save_printer_connection")
 		return
 	}
 	audit(map[string]any{"event": map[bool]string{true: "connection_edited", false: "connection_added"}[prev != nil], "printer": key, "kind": p.Kind, "client": s.clientIP(r)})
@@ -374,27 +378,27 @@ func (s *Server) putConnection(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	m := s.sends
 	if m.store == nil {
-		fail(w, 403, "Printer network connections are disabled on this server.")
+		fail(w, 403, "printer_network_connections_disabled")
 		return
 	}
 	key := r.PathValue("printer")
 	p := m.connectionFor(key)
 	if p == nil {
-		fail(w, 404, "This printer doesn't have a network connection set up yet.")
+		fail(w, 404, "printer_doesnt_have_network")
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.holds(p) {
-		fail(w, 404, "This printer doesn't have a network connection set up yet.")
+		fail(w, 404, "printer_doesnt_have_network")
 		return
 	}
 	if m.busy[p.Printer] && p.Printer != "" {
-		fail(w, 409, "This printer is currently receiving a file upload—wait for it to finish before removing the connection.")
+		fail(w, 409, "printer_currently_receiving_file_2")
 		return
 	}
 	if err := m.replace(p, nil); err != nil {
-		fail(w, 500, "Oops! Couldn't save your printer connections.")
+		fail(w, 500, "couldnt_save_printer_connections")
 		return
 	}
 	os.Remove(p.CredentialFile)
@@ -407,7 +411,7 @@ func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adoptConnection(w http.ResponseWriter, r *http.Request) {
 	m := s.sends
 	if m.store == nil {
-		fail(w, 403, "Printer network connections are disabled on this server.")
+		fail(w, 403, "printer_network_connections_disabled")
 		return
 	}
 	key := r.PathValue("printer")
@@ -416,44 +420,44 @@ func (s *Server) adoptConnection(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<10)); err != nil || json.Unmarshal(raw, &body) != nil || body.ID == "" || strings.HasPrefix(key, "unassigned:") {
-		fail(w, 400, `expected {"id": unassigned connection id, "name": printer setup name}`)
+		fail(w, 400, "expected_id_unassigned_connection")
 		return
 	}
 	src := m.connectionFor("unassigned:" + body.ID)
 	if src == nil {
-		fail(w, 404, "Couldn't find a saved connection with that ID.")
+		fail(w, 404, "couldnt_find_saved_connection")
 		return
 	}
 	if why := s.connectionConflict(key, src.Serial, src); why != "" {
-		fail(w, 409, why)
+		fail(w, 409, "printer_store_conflict", why)
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.holds(src) {
-		fail(w, 404, "Couldn't find a saved connection with that ID.")
+		fail(w, 404, "couldnt_find_saved_connection")
 		return
 	}
 	if m.printerLocked(key) != nil {
-		fail(w, 409, "This printer already has a connection set up—remove the existing one first.")
+		fail(w, 409, "printer_already_has_connection")
 		return
 	}
 	next := *src
 	next.Printer, next.Name = key, cmp.Or(strings.TrimSpace(body.Name), src.Name)
 	if err := m.replace(src, &next); err != nil {
-		fail(w, 500, "Oops! Couldn't save your printer connections.")
+		fail(w, 500, "couldnt_save_printer_connections")
 		return
 	}
 	m.hub.changed()
 	writeJSON(w, 200, next.view())
 }
 
-var legacyHostTypes = map[string]string{"prusalink": "prusalink", "octoprint": "octoprint", "moonraker": "moonraker", "duet": "duet"}
+var legacyHostTypes = map[string]string{"prusalink": "prusalink", "octoprint": "octoprint", "moonraker": "moonraker", "duet": "duet", "flashforge": "flashforge"}
 
 func (s *Server) importLegacyConnection(w http.ResponseWriter, r *http.Request) {
 	m := s.sends
 	if m.store == nil {
-		fail(w, 403, "Printer network connections are disabled on this server.")
+		fail(w, 403, "printer_network_connections_disabled")
 		return
 	}
 	key := r.PathValue("printer")
@@ -462,7 +466,7 @@ func (s *Server) importLegacyConnection(w http.ResponseWriter, r *http.Request) 
 		Config map[string]string `json:"config"`
 	}
 	if raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<10)); err != nil || json.Unmarshal(raw, &body) != nil || body.Config == nil || strings.HasPrefix(key, "unassigned:") {
-		fail(w, 400, `expected {"name", "config": {"host_type", "print_host", ...}}`)
+		fail(w, 400, "expected_name_config_host")
 		return
 	}
 	c := body.Config
@@ -477,7 +481,14 @@ func (s *Server) importLegacyConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	edit := &connectionEdit{Kind: kind, Name: strings.TrimSpace(body.Name), URL: strings.TrimSpace(c["print_host"]), Key: c["printhost_apikey"]}
-	if port := strings.TrimSpace(c["printhost_port"]); port != "" && !strings.Contains(strings.TrimPrefix(strings.TrimPrefix(edit.URL, "http://"), "https://"), ":") {
+	if kind == "flashforge" {
+		host := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(edit.URL, "http://"), "https://"), "/")
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		edit.URL, edit.Key, edit.Host = "", "", host
+		edit.Serial, edit.AccessCode = strings.ToUpper(strings.TrimSpace(c["flashforge_serial_number"])), strings.TrimSpace(c["printhost_apikey"])
+	} else if port := strings.TrimSpace(c["printhost_port"]); port != "" && !strings.Contains(strings.TrimPrefix(strings.TrimPrefix(edit.URL, "http://"), "https://"), ":") {
 		edit.URL += ":" + port
 	}
 	if c["printhost_authorization_type"] == "user" {
@@ -511,12 +522,12 @@ func (s *Server) importLegacyConnection(w http.ResponseWriter, r *http.Request) 
 	}
 	if edit.Key != "" {
 		if err := writeFileAtomic(p.CredentialFile, []byte(edit.Key+"\n")); err != nil {
-			fail(w, 500, "Oops! Couldn't save the printer's access code or password on the server.")
+			fail(w, 500, "couldnt_save_printers_access")
 			return
 		}
 	}
 	if err := m.replace(nil, p); err != nil {
-		fail(w, 500, "Oops! Couldn't save the printer connection.")
+		fail(w, 500, "couldnt_save_printer_connection")
 		return
 	}
 	audit(map[string]any{"event": "connection_migrated", "printer": key, "kind": kind, "client": s.clientIP(r)})
@@ -530,13 +541,13 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := s.clientIP(r)
-	if ok, retry := s.sends.allowBurst("test "+client, 10); !ok {
+	if ok, retry := s.sends.allowBurst("test "+client, 10, sendRate); !ok {
 		w.Header().Set("Retry-After", fmt.Sprint(min(retry, 86400)))
-		fail(w, 429, "Too many connection tests in a row—wait a few seconds and try again.")
+		fail(w, 429, "too_many_connection_tests")
 		return
 	}
 	if body.Kind == "bambu-connect" {
-		writeJSON(w, 200, PrinterTest{OK: true, Stage: "ok", Message: "Bambu Connect opens on this computer when you send"})
+		writeJSON(w, 200, PrinterTest{OK: true, Stage: "ok", Message: "Bambu Connect will pop open on this computer when you send!"})
 		return
 	}
 	saved := s.sends.printer(body.Printer)
@@ -545,7 +556,7 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 		secret, _ = saved.secret()
 	}
 	if secret == "" && secretRequired(body.Kind) {
-		fail(w, 400, map[bool]string{true: "enter the printer's access code (Settings > Network on the printer)", false: "enter the printer's API key or password"}[body.Kind == "bambu-lan"])
+		fail(w, 400, map[bool]string{true: "enter_access_code", false: "enter_api_key_or_password"}[body.Kind == "bambu-lan"])
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
@@ -566,6 +577,8 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 		if result.OK && p == saved && result.Model != "" {
 			s.sends.setModel(p, result.Model)
 		}
+	} else if p.Kind == "flashforge" {
+		result = testFlashforge(ctx, p, secret)
 	} else {
 		result = testHost(ctx, p, secret)
 	}
@@ -589,18 +602,18 @@ func (m *SendManager) setModel(p *PrinterConfig, model string) {
 func (s *Server) amsConnection(w http.ResponseWriter, r *http.Request) {
 	p := s.sends.printer(r.PathValue("printer"))
 	if p == nil || p.Kind != "bambu-lan" {
-		fail(w, 404, "This printer doesn't have a Bambu LAN connection set up.")
+		fail(w, 404, "printer_doesnt_have_bambu")
 		return
 	}
 	secret, err := p.secret()
 	if err != nil {
-		fail(w, 409, err.Error())
+		fail(w, 409, "printer_store_conflict", err.Error())
 		return
 	}
 	client := s.clientIP(r)
-	if ok, retry := s.sends.allowBurst("ams "+client, 10); !ok {
+	if ok, retry := s.sends.allowBurst("ams "+client, 10, sendRate); !ok {
 		w.Header().Set("Retry-After", fmt.Sprint(min(retry, 86400)))
-		fail(w, 429, "Checking AMS too frequently—wait a few seconds and try again.")
+		fail(w, 429, "checking_ams_too_frequently")
 		return
 	}
 	if st, ok := s.sends.hub.current(p.Printer); ok && st.Online && st.Trays != nil {
@@ -611,7 +624,7 @@ func (s *Server) amsConnection(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	trays, err := amsBambu(ctx, p, secret)
 	if err != nil {
-		fail(w, 502, redact(err.Error(), secret))
+		fail(w, 502, "printer_store_upstream", redact(err.Error(), secret))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"trays": trays})
@@ -620,39 +633,55 @@ func (s *Server) amsConnection(w http.ResponseWriter, r *http.Request) {
 func (s *Server) controlConnection(w http.ResponseWriter, r *http.Request) {
 	p := s.sends.printer(r.PathValue("printer"))
 	if p == nil || p.Kind == "bambu-connect" {
-		fail(w, 404, "This printer doesn't have a network connection that supports remote commands.")
+		fail(w, 404, "printer_doesnt_have_network_2")
 		return
 	}
 	var body struct {
 		Action string `json:"action"`
 	}
 	if raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<10)); err != nil || json.Unmarshal(raw, &body) != nil || body.Action != "stop" && body.Action != "pause" && body.Action != "resume" {
-		fail(w, 400, `expected {"action": "stop" | "pause" | "resume"}`)
+		fail(w, 400, "expected_action_stop_pause")
 		return
 	}
 	secret, err := p.secret()
 	if err != nil {
-		fail(w, 409, err.Error())
+		fail(w, 409, "printer_store_conflict", err.Error())
 		return
 	}
-	if ok, retry := s.sends.allowBurst("control "+s.clientIP(r), 10); !ok {
+	if ok, retry := s.sends.allowBurst("control "+s.clientIP(r), 10, sendRate); !ok {
 		w.Header().Set("Retry-After", fmt.Sprint(min(retry, 86400)))
-		fail(w, 429, "Whoa, slow down! Too many printer commands sent at once—wait a moment and try again.")
+		fail(w, 429, "slow_down_too_many")
+		return
+	}
+	if p.Kind == "bambu-lan" {
+		ctx, cancel := context.WithTimeout(r.Context(), controlWait)
+		defer cancel()
+		shows := map[string]func(PrinterStatus) bool{
+			"pause":  func(st PrinterStatus) bool { return st.State == "paused" },
+			"resume": func(st PrinterStatus) bool { return st.State == "printing" },
+			"stop": func(st PrinterStatus) bool {
+				return st.State != "printing" && st.State != "paused" && st.State != "busy"
+			},
+		}[body.Action]
+		result := s.runBambuCommand(ctx, p, secret, bambuCommand{scope: "print", body: map[string]any{"command": body.Action, "param": ""},
+			codes: "control", what: "the " + body.Action, judge: shownBy(shows)})
+		audit(map[string]any{"event": "printer_" + body.Action, "printer": p.Printer, "kind": p.Kind, "client": s.clientIP(r), "state": result.State, "error": result.Error})
+		writeJSON(w, result.status(), result)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	switch p.Kind {
-	case "bambu-lan":
-		err = controlBambu(ctx, p, secret, body.Action)
 	case "duet":
 		err = controlDuet(ctx, p, secret, body.Action)
+	case "flashforge":
+		err = controlFlashforge(ctx, p, body.Action)
 	default:
 		err = controlHTTP(ctx, p, secret, body.Action)
 	}
 	audit(map[string]any{"event": "printer_" + body.Action, "printer": p.Printer, "kind": p.Kind, "client": s.clientIP(r), "error": fmt.Sprint(err)})
 	if err != nil {
-		fail(w, 502, redact(err.Error(), secret))
+		fail(w, 502, "printer_store_upstream", redact(err.Error(), secret))
 		return
 	}
 	s.sends.hub.poke(p.Printer)

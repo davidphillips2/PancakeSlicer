@@ -667,7 +667,9 @@ void flatten_catalog(const Args &args)
         std::cout << "fold candidates written to " << args.fold_candidates << "\n";
         return;
     }
-    for (const auto &[from, into] : catalog.folds) {
+    for (const auto &fold : catalog.folds) {
+        const auto &from = fold.first;
+        const auto &into = fold.second;
         if (!catalog.folded.count(from)) throw std::runtime_error("catalog_folds.json: " + from.first + " has no filament " + from.second);
         if (std::none_of(files["filaments"].begin(), files["filaments"].end(), [&](const auto &p) { return p["id"] == into; }))
             throw std::runtime_error("catalog_folds.json: no product " + into + " to fold " + from.second + " into");

@@ -13,8 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -52,7 +50,7 @@ func (s *Server) discoverPrinters(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), discoveryWindow+2*time.Second)
 	defer cancel()
-	found, notes := discover(ctx, m.store.hosts, discoveryEnv{s.cfg.Resources, s.cfg.DataDir, s.catalog})
+	found, notes := discover(ctx, m.store.hosts, discoveryEnv{resources: s.cfg.Resources, dataDir: s.cfg.DataDir, catalog: s.catalog})
 	for i := range found {
 		d := &found[i]
 		for _, p := range m.connections() {

@@ -3,7 +3,6 @@ package main
 import (
 	"compress/gzip"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
